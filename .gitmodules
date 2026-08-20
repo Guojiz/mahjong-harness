@@ -1,0 +1,4 @@
+[submodule "Mortal"]
+	path = Mortal
+	url = https://github.com/Guojiz/Mortal.git
+	branch = dsh-log-viewer

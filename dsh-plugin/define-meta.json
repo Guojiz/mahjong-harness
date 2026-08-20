@@ -1,0 +1,8 @@
+{
+  "plugin": {
+    "kind": "existing",
+    "pluginId": "mjai-1"
+  },
+  "name": "dsh-mahjong-runtime-live-card",
+  "purpose": "保留麻将 worker 与工具 Host 能力，并提供可实时关联 session 的紧凑卡片和显式 MJAI 导出。"
+}
