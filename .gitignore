@@ -1,0 +1,46 @@
+# 密钥与本地配置（禁止提交）
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+Mortal/.venv/
+.venv/
+
+# Rust 构建产物
+Mortal/target/
+**/target/
+
+# 对局日志与测试残留
+logs/
+logs-*/
+.harness-test-logs/
+*.json.gz
+!Mortal/libriichi/src/algo/data/*.gz
+
+# 随机临时文件（工具生成，根目录散落的小文件：含数字或下划线，且不误伤 harness/handoff 等纯字母目录）
+/[0-9a-z_]*[0-9][0-9a-z_]*
+/[0-9a-z_]*_[0-9a-z_]*
+
+# 生成物目录
+/output/
+
+# 真实源码/文档目录（显式取消忽略，双重保险）
+!/handoff/
+!/harness/
+
+# Mortal/libriichi 为外部依赖（独立仓库），不纳入本仓库
+/Mortal/
+
+# 旧素材备份（接手卡明确禁止进入发布包；如需在新电脑保留请手动复制）
+legacy-assets/
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
