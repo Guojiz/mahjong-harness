@@ -18,6 +18,7 @@ DeepSeek Harness 内嵌日本麻将运行时：对话内实时卡片、MJAI 导�
 本仓库目前没有独立产品站。源码、DSH 插件和接手说明都在 GitHub。
 
 - 插件源码：[dsh-plugin/README.md](dsh-plugin/README.md)
+- 回放器：`dsh-plugin/log-viewer/`（及 submodule `Mortal/log-viewer`）
 - 接手卡：`DSH_日本麻将内嵌开发接手卡.md`
 - 子模块：`Mortal`（需 `git submodule update --init`）
 
@@ -25,7 +26,7 @@ DeepSeek Harness 内嵌日本麻将运行时：对话内实时卡片、MJAI 导�
 
 插件注册四个工具：`mahjong_start` / `mahjong_status` / `mahjong_cancel` / `mahjong_export`。
 
-换电脑时必须改 `dsh-plugin/host.js` 里的 `WORKSPACE` 绝对路径，并准备好 `Mortal/.venv`。
+换电脑时优先设置环境变量 `DSH_MAHJONG_WORKSPACE`（可选），`host.js` 会自动探测含 `harness/worker.py` 的目录；并准备好 `Mortal/.venv` + `libriichi.pyd`。
 
 
 ## 官网与其它推广

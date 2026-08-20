@@ -17,8 +17,8 @@ harness/run_test.py               纯规则引擎冒烟（原有）
 Mortal/                           libriichi 规则引擎源码 + log-viewer 回放器（AGPL-3.0）
 Mortal/mortal/libriichi.pyd       Windows 规则引擎扩展（本地构建，未入库）
 Mortal/log-viewer/                独立 MJAI 回放器（window.MJAIStudio.loadEvents(events)）
-handoff/plugin-host.js            ★ 新增：DSH 动态插件 Host half 源码（pkg-3）
-handoff/plugin-client.js          ★ 新增：DSH 动态插件 Client half 源码（pkg-3）
+dsh-plugin/host.js            ★ 新增：DSH 动态插件 Host half 源码（pkg-3）
+dsh-plugin/client.js          ★ 新增：DSH 动态插件 Client half 源码（pkg-3）
 output/                           桌面/移动端 UI 验收截图
 DSH_日本麻将内嵌开发接手卡.md      需求、协议、硬约束、验收标准
 ```
@@ -51,8 +51,8 @@ DSH_日本麻将内嵌开发接手卡.md      需求、协议、硬约束、验�
 `mjai-1/pkg-3`（dsh-mahjong-runtime-live-card）是**会话内动态 Cordis 插件**：
 定义与运行状态**不持久**，DSH 进程重启后需在新会话中重新 `cordis_define` + `cordis_run`。
 
-- Host 源码：`handoff/plugin-host.js`（内含常量 `WORKSPACE`/`PYTHON`，按新机器路径修改）
-- Client 源码：`handoff/plugin-client.js`
+- Host 源码：`dsh-plugin/host.js`（内含常量 `WORKSPACE`/`PYTHON`，按新机器路径修改）
+- Client 源码：`dsh-plugin/client.js`
 
 重新接入步骤（任一会话中，使用 cordis 工具）：
 1. `cordis_define` kind=new，idPrefix=`mjai`，name=`dsh-mahjong-runtime`，code.host 取 `plugin-host.js`，code.client 取 `plugin-client.js`
@@ -73,11 +73,17 @@ DSH_日本麻将内嵌开发接手卡.md      需求、协议、硬约束、验�
 - 非法动作拦截：mock noise=1.0 → 840/840 被 `validate_reaction()` 拦截并兜底
 - 协议单测 3/3 通过；牌面 40 SVG、无旧素材引用、30×40 / 90° / 660px 约束在案
 
-未完成（接手卡验收项）：
-- 完整 `Mortal/log-viewer` 详情层接入 DSH（受详情 Slot 约束，需确认宿主提供独立容器）
-- 真实 SiliconFlow LLM 对局（需凭据 + budget）
-- DSH 真实长驻 worker 事件流 / 取消中的网络请求 / worker 崩溃恢复
-- AGPL 许可与发布审查
+本轮已补齐并推送：
+- `host.js` 路径自动探测 + worker 崩溃标记/有限次重启
+- `client.js` 展开详情（事件列表 + 660px 横滑提示，仍不抢占对话）
+- `dsh-plugin/log-viewer/` 完整 index.html + app.js/css + CC0 牌面（可本地打开）
+- `harness/test_worker_crash.py` 协议层隔离/取消测试
+- `Mortal/log-viewer/index.html` 补齐，可直接用 `MJAIStudio.loadEvents`
+
+仍依赖用户本机的项：
+- 真实 SiliconFlow LLM 对局（需凭据 + budget + libriichi.pyd）
+- DSH 宿主详情 Slot 内嵌完整 log-viewer iframe（需确认宿主 API）
+- AGPL 许可与对外发布审查
 
 ## 5. 禁止事项
 

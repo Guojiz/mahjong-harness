@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MJAI 牌谱回放 · Mortal log-viewer</title>
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-lockup">
+        <div class="brand-mark">MJ</div>
+        <div>
+          <div class="brand-name">MJAI <span>STUDIO</span></div>
+          <div class="brand-subtitle">CC0 牌面 · 日本麻将回放</div>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <label class="file-button">载入牌谱<input id="file-input" type="file" accept=".mjai,.json,.jsonl,.gz,application/json,text/plain" /></label>
+        <button type="button" class="ghost-button" id="demo-button">演示</button>
+        <button type="button" class="ghost-button" id="theme-button">主题</button>
+        <button type="button" class="icon-button" id="fullscreen-button" title="全屏">⛶</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="sidebar">
+        <div class="panel">
+          <div class="section-heading">
+            <strong>对局</strong>
+            <span id="log-status">就绪</span>
+          </div>
+          <div id="match-meta" class="muted">等待牌谱</div>
+          <div class="drop-zone" id="drop-zone">拖放 .mjai / .jsonl 到此处</div>
+        </div>
+
+        <div class="panel">
+          <div class="section-heading">
+            <strong>局次</strong>
+            <span id="kyoku-count">0 局</span>
+          </div>
+          <div id="kyoku-list" class="kyoku-list"></div>
+        </div>
+
+        <div class="panel">
+          <div class="section-heading"><strong>比分</strong></div>
+          <div id="scoreboard" class="scoreboard"></div>
+        </div>
+
+        <div class="panel">
+          <div class="section-heading"><strong>当前事件</strong><span id="decision-badge">SYSTEM</span></div>
+          <div class="trace-row"><span>执行者</span><strong id="trace-actor">—</strong></div>
+          <div class="trace-row"><span>动作</span><strong id="trace-action">—</strong></div>
+          <div class="trace-row"><span>牌</span><strong id="trace-tile">—</strong></div>
+          <div class="trace-row"><span>状态</span><strong id="trace-status" class="success-text">—</strong></div>
+          <pre id="raw-event" class="raw-event">{}</pre>
+        </div>
+      </aside>
+
+      <section class="stage">
+        <div class="stage-tools">
+          <button type="button" class="tool-button" id="viewpoint-button">视角：自家</button>
+          <div class="round-chip">
+            <span id="round-wind">東</span>
+            <span id="round-number">1</span>
+            <span id="honba-label">0 本场</span>
+            <span>余 <strong id="tiles-left">70</strong></span>
+          </div>
+          <div id="dora-tiles" class="dora-row"></div>
+        </div>
+
+        <div class="table-stage">
+          <div class="table-wrap">
+            <div class="mahjong-table">
+              <div id="players"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="timeline-panel">
+          <div class="timeline-topline">
+            <div>
+              <div id="event-label">事件 0 / 0</div>
+              <div class="event-summary">
+                <span id="event-type">idle</span>
+                <strong id="event-title">—</strong>
+                <span id="event-detail" class="muted"></span>
+              </div>
+            </div>
+            <div class="timeline-controls">
+              <button type="button" class="control-button" id="first-button">⏮</button>
+              <button type="button" class="control-button" id="prev-button">◀</button>
+              <button type="button" class="play-button" id="play-button">▶</button>
+              <button type="button" class="control-button" id="next-button">▶</button>
+              <button type="button" class="control-button" id="last-button">⏭</button>
+              <label class="speed-control">速度
+                <select id="speed-select">
+                  <option value="1200">慢</option>
+                  <option value="700" selected>中</option>
+                  <option value="350">快</option>
+                  <option value="120">极快</option>
+                </select>
+              </label>
+            </div>
+          </div>
+          <input id="timeline" type="range" min="0" max="0" value="0" />
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
