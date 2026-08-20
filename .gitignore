@@ -34,8 +34,7 @@ logs-*/
 !/handoff/
 !/harness/
 
-# Mortal/libriichi 为外部依赖（独立仓库），不纳入本仓库
-/Mortal/
+# Mortal/libriichi 以 submodule 引入（Guojiz/Mortal @ dsh-log-viewer），其内部产物由自身仓库管理
 
 # 旧素材备份（接手卡明确禁止进入发布包；如需在新电脑保留请手动复制）
 legacy-assets/
