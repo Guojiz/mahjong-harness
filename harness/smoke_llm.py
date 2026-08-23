@@ -61,6 +61,10 @@ def main() -> int:
     ap.add_argument("--model", default=os.environ.get("LLM_MODEL", "deepseek-ai/DeepSeek-V4-Flash"))
     ap.add_argument("--key-env", default="LLM_API_KEY")
     ap.add_argument("--key-yaml", default="CHATGPT_API_KEY")
+    ap.add_argument("--timeout", type=float, default=45.0)
+    ap.add_argument("--retries", type=int, default=0)
+    ap.add_argument("--max-tokens", type=int, default=128)
+    ap.add_argument("--total-timeout", type=float, default=90.0)
     args = ap.parse_args()
 
     key = _load_key(args.key_env, args.key_yaml)
@@ -101,7 +105,13 @@ def main() -> int:
     print(state_desc)
     print("\n===== 调用模型 ... =====")
     client = OpenAICompatibleClient(
-        api_key=key, base_url=args.base_url, model=args.model
+        api_key=key,
+        base_url=args.base_url,
+        model=args.model,
+        max_tokens=args.max_tokens,
+        timeout=args.timeout,
+        retries=args.retries,
+        total_timeout=args.total_timeout,
     )
     text = client.chat(prompt)
     print(f"模型回复: {text[:300]}")

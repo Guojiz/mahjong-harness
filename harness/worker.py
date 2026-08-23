@@ -52,18 +52,22 @@ class EventingLLMEngine(LLMEngine):
     def __init__(self, *args: Any, session: "GameSession", **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._session = session
-        self._seen_events = 0
+        self._seen_events: dict[int, int] = {}
+        self._display_game_index = 0
 
     def react_one(self, game_state: Any) -> str:
         events = event_list(game_state.events_json)
-        if len(events) < self._seen_events:
-            self._seen_events = 0
-        for event in events[self._seen_events:]:
-            self._session.publish_mjai(event)
-        self._seen_events = len(events)
+        game_index = int(game_state.game_index)
+        seen = self._seen_events.get(game_index, 0)
+        if len(events) < seen:
+            seen = 0
+        if game_index == self._display_game_index:
+            for event in events[seen:]:
+                self._session.publish_mjai(event)
+        self._seen_events[game_index] = len(events)
         if self._session.cancelled.is_set():
-            # The arena accepts a legal no-op at reaction boundaries. It cannot
-            # interrupt a currently blocking external HTTP request.
+            # The arena accepts a legal no-op at reaction boundaries. The HTTP
+            # client also observes this event between bounded stream reads.
             return json.dumps({"type": "none"})
         before_violations = self.violations
         before_delegated = self.delegated
@@ -76,6 +80,16 @@ class EventingLLMEngine(LLMEngine):
             "fallbacks": self.delegated,
         })
         return result
+
+    def end_kyoku(self, index: int) -> None:
+        if index == self._display_game_index:
+            self._session.publish_mjai({"type": "end_kyoku"})
+
+    def end_game(self, index: int, scores: Any) -> None:
+        super().end_game(index, scores)
+        if index == self._display_game_index:
+            final_scores = [int(score) for score in scores]
+            self._session.publish_mjai({"type": "end_game", "scores": final_scores})
 
 
 @dataclass
@@ -120,6 +134,27 @@ class GameSession:
                 result["events"] = list(self.events)
             return result
 
+    def _log_dir(self) -> Path | None:
+        try:
+            d = self.log_dir
+            if not isinstance(d, Path):
+                return None
+            d.mkdir(parents=True, exist_ok=True)
+            return d
+        except (AttributeError, OSError):
+            return None
+
+    def _append_event_to_log(self, event: dict[str, Any]) -> None:
+        log_dir = self._log_dir()
+        if log_dir is None:
+            return
+        events_file = log_dir / "events.jsonl"
+        try:
+            with open(events_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
+        except OSError:
+            pass
+
     def publish_mjai(self, event: dict[str, Any]) -> None:
         with self.lock:
             self.seq += 1
@@ -127,6 +162,7 @@ class GameSession:
             if isinstance(event.get("scores"), list) and len(event["scores"]) == 4:
                 self.scores = [int(score) for score in event["scores"]]
             seq = self.seq
+        self._append_event_to_log(event)
         emit({"event": "mjai", "sessionId": self.session_id, "seq": seq, "data": event})
 
     def publish_decision(self, data: dict[str, Any]) -> None:
@@ -136,7 +172,16 @@ class GameSession:
         emit({"event": "decision", "sessionId": self.session_id, "seq": seq, "data": data})
 
     def publish_state(self) -> None:
-        emit({"event": "session", "sessionId": self.session_id, "data": self.snapshot()})
+        state = self.snapshot()
+        log_dir = self._log_dir()
+        if log_dir is not None:
+            temporary = log_dir / "state.json.tmp"
+            try:
+                temporary.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+                temporary.replace(log_dir / "state.json")
+            except OSError:
+                pass
+        emit({"event": "session", "sessionId": self.session_id, "data": state})
 
     def run(self) -> None:
         started = time.monotonic()
@@ -152,8 +197,10 @@ class GameSession:
                     api_key=self.api_key,
                     base_url=self.base_url,
                     model=self.model,
-                    timeout=45.0,
-                    retries=1,
+                    timeout=5.0,
+                    retries=0,
+                    total_timeout=45.0,
+                    cancel_event=self.cancelled,
                 )
                 client_name = self.model
             llm = EventingLLMEngine(
@@ -186,7 +233,7 @@ class GameSession:
                 self.fallbacks = llm.delegated
                 self.llm_calls = llm.llm_calls
                 if llm.game_results:
-                    self.scores = list(llm.game_results[-1]["scores"])
+                    self.scores = list(llm.game_results[0]["scores"])
                 self.status = "cancelled" if self.cancelled.is_set() else "ended"
             self.publish_decision({"status": "complete", "rankings": list(rankings)})
         except Exception as error:  # noqa: BLE001

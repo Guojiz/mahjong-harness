@@ -37,6 +37,12 @@ function probePython(workspace) {
 
 const WORKSPACE = probeWorkspace();
 const PYTHON = probePython(WORKSPACE);
+const VIEWER_HOST = process.env.DSH_MAHJONG_VIEWER_HOST === 'localhost' ? 'localhost' : '127.0.0.1';
+const requestedViewerPort = Number(process.env.DSH_MAHJONG_VIEWER_PORT || 8765);
+const VIEWER_PORT = Number.isInteger(requestedViewerPort) && requestedViewerPort > 0 && requestedViewerPort <= 65535
+  ? requestedViewerPort
+  : 8765;
+const LLM_BASE_URL = process.env.DSH_MAHJONG_BASE_URL || 'https://api.siliconflow.cn/v1';
 
 return {
   inject: ['subprocess'],
@@ -46,8 +52,44 @@ return {
     const subprocess = ctx.subprocess;
     let buffer = '';
     let worker;
+    let viewer;
+    let viewerReady = false;
+    let disposed = false;
     let restartCount = 0;
+    let viewerRestartCount = 0;
     const MAX_RESTARTS = 5;
+
+    function viewerUrl(sessionId) {
+      return viewerReady
+        ? 'http://' + VIEWER_HOST + ':' + VIEWER_PORT + '/view/' + encodeURIComponent(sessionId)
+        : undefined;
+    }
+
+    function ensureViewer() {
+      if (viewer) return viewer;
+      if (disposed) throw new Error('mahjong plugin is disposed');
+      viewer = subprocess.spawn({
+        argv: [PYTHON, '-m', 'harness.serve_logs', '--host', VIEWER_HOST, '--port', String(VIEWER_PORT), '--session-dir', path.join(WORKSPACE, 'logs', 'dsh')],
+        cwd: WORKSPACE,
+        graceMs: 1500,
+        stdio: { stdin: 'ignore', stdout: 'pipe', stderr: { maxBytes: 4000 } },
+        env: Object.assign({}, process.env, { PYTHONPATH: WORKSPACE, PYTHONDONTWRITEBYTECODE: '1' }),
+      });
+      if (viewer.stdout && viewer.stdout.on) {
+        viewer.stdout.on('data', (chunk) => {
+          if (String(chunk).includes('MJAI log server:')) viewerReady = true;
+        });
+      }
+      viewer.on('exit', () => {
+        viewer = undefined;
+        viewerReady = false;
+        if (!disposed && viewerRestartCount < 3) {
+          viewerRestartCount += 1;
+          try { ensureViewer(); } catch (_) {}
+        }
+      });
+      return viewer;
+    }
 
     function safeState(state) {
       if (!state || typeof state !== 'object') return { status: 'unknown' };
@@ -121,7 +163,7 @@ return {
         worker = undefined;
         buffer = '';
         markWorkerDead(reason);
-        if (restartCount < MAX_RESTARTS) {
+        if (!disposed && restartCount < MAX_RESTARTS) {
           restartCount += 1;
           try { ensureWorker(); } catch (_) {}
         }
@@ -131,6 +173,7 @@ return {
 
     function ensureWorker() {
       if (worker) return worker;
+      if (disposed) throw new Error('mahjong plugin is disposed');
       worker = subprocess.spawn({
         argv: [PYTHON, '-m', 'harness.worker'],
         cwd: WORKSPACE,
@@ -175,20 +218,28 @@ return {
     }
 
     async function start(args) {
+      ensureViewer();
       const apiKey = await resolveApiKey();
       const sessionId = 'mj-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
       sessions.set(sessionId, { state: { sessionId: sessionId, status: 'starting' }, events: [] });
-      const result = await send('session.start', {
-        sessionId: sessionId,
-        seed: args && args.seed != null ? Number(args.seed) : 7,
-        model: (args && args.model) || 'deepseek-ai/DeepSeek-V4-Flash',
-        apiKey: apiKey,
-        baseUrl: (args && args.baseUrl) || 'https://api.siliconflow.cn/v1',
-        budget: args && args.budget != null ? Number(args.budget) : undefined,
-        mock: !!(args && args.mock),
-        logDir: path.join(WORKSPACE, 'logs', 'dsh'),
-      });
+      let result;
+      try {
+        result = await send('session.start', {
+          sessionId: sessionId,
+          seed: args && args.seed != null ? Number(args.seed) : 7,
+          model: (args && args.model) || 'deepseek-ai/DeepSeek-V4-Flash',
+          apiKey: apiKey,
+          baseUrl: LLM_BASE_URL,
+          budget: args && args.budget != null ? Number(args.budget) : undefined,
+          mock: !!(args && args.mock),
+          logDir: path.join(WORKSPACE, 'logs', 'dsh'),
+        });
+      } catch (error) {
+        sessions.delete(sessionId);
+        throw error;
+      }
       const state = safeState(result);
+      state.viewerUrl = viewerUrl(sessionId);
       const entry = sessions.get(sessionId) || { events: [] };
       entry.state = state;
       sessions.set(sessionId, entry);
@@ -202,6 +253,7 @@ return {
       try {
         const result = await send('session.status', { sessionId: sessionId });
         const state = safeState(result);
+        state.viewerUrl = viewerUrl(sessionId);
         if (local) {
           state.events = local.events.slice(-200);
           state.eventCount = Math.max(Number(state.eventCount || 0), local.events.length);
@@ -224,6 +276,7 @@ return {
       if (!sessionId) throw new Error('sessionId is required');
       const result = await send('session.export', { sessionId: sessionId });
       const state = safeState(result);
+      state.viewerUrl = viewerUrl(sessionId);
       const local = sessions.get(sessionId);
       if (local && local.events.length) {
         state.events = local.events.slice();
@@ -256,7 +309,6 @@ return {
           mock: { type: 'boolean' },
           budget: { type: 'number' },
           model: { type: 'string' },
-          baseUrl: { type: 'string' },
         },
       },
       start
@@ -271,7 +323,11 @@ return {
       'mahjong_cancel',
       '取消一局仍在运行的日本麻将。',
       { type: 'object', properties: { sessionId: { type: 'string' } }, required: ['sessionId'] },
-      async function (args) { return safeState(await send('session.cancel', { sessionId: args.sessionId })); }
+      async function (args) {
+        const state = safeState(await send('session.cancel', { sessionId: args.sessionId }));
+        state.viewerUrl = viewerUrl(args.sessionId);
+        return state;
+      }
     ));
     harness.registerTool(ctx, tool(
       'mahjong_export',
@@ -282,8 +338,11 @@ return {
 
     ctx.effect(function () {
       return function () {
+        disposed = true;
         if (worker) { try { worker.terminate(); } catch (_) {} }
+        if (viewer) { try { viewer.terminate(); } catch (_) {} }
         worker = undefined;
+        viewer = undefined;
         sessions.clear();
       };
     }, 'mahjong-worker');

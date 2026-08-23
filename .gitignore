@@ -15,6 +15,7 @@ Mortal/.venv/
 # Rust 构建产物
 Mortal/target/
 **/target/
+.cargo_home/
 
 # 对局日志与测试残留
 logs/

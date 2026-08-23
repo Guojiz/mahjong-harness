@@ -49,6 +49,9 @@ class OpenAICompatibleClient(LLMClient):
         timeout: float = 45.0,
         retries: int = 2,
         retry_backoff: float = 2.0,
+        stream: bool = True,
+        total_timeout: float | None = 90.0,
+        cancel_event: Any | None = None,
     ): 
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
@@ -58,12 +61,16 @@ class OpenAICompatibleClient(LLMClient):
         self.timeout = timeout
         self.retries = retries
         self.retry_backoff = retry_backoff
+        self.stream = stream
+        self.total_timeout = total_timeout
+        self.cancel_event = cancel_event
         self.usage_total = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     def chat(self, user_prompt: str) -> str:
         last_err: Optional[Exception] = None
         attempts = max(1, self.retries + 1)
         for attempt in range(attempts):
+            self._raise_if_cancelled()
             try:
                 return self._chat_once(user_prompt)
             except Exception as e:  # noqa: BLE001
@@ -82,7 +89,7 @@ class OpenAICompatibleClient(LLMClient):
             ],
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
-            "stream": False,
+            "stream": self.stream,
         }
         req = urllib.request.Request(
             url,
@@ -95,6 +102,8 @@ class OpenAICompatibleClient(LLMClient):
         )
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                if self.stream:
+                    return self._read_stream(resp)
                 data = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             raise RuntimeError(f"LLM HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:500]}") from e
@@ -107,6 +116,63 @@ class OpenAICompatibleClient(LLMClient):
             for k in self.usage_total:
                 self.usage_total[k] += int(usage.get(k, 0))
         return content
+
+    def _read_stream(self, response: Any) -> str:
+        """Read OpenAI-compatible SSE, ignoring provider reasoning chunks."""
+        content_parts: list[str] = []
+        usage: dict[str, Any] | None = None
+        started = time.monotonic()
+        iterator = iter(response)
+        while True:
+            self._raise_if_cancelled()
+            if self.total_timeout is not None:
+                remaining = self.total_timeout - (time.monotonic() - started)
+                if remaining <= 0:
+                    raise TimeoutError(f"LLM 流式响应超过总时限 {self.total_timeout:g}s")
+                self._set_response_timeout(response, min(self.timeout, remaining))
+            try:
+                raw_line = next(iterator)
+            except StopIteration:
+                break
+            line = raw_line.decode("utf-8", "replace").strip()
+            if not line or line.startswith(":") or not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if payload == "[DONE]":
+                break
+            try:
+                data = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(data.get("usage"), dict):
+                usage = data["usage"]
+            choices = data.get("choices")
+            if not isinstance(choices, list) or not choices:
+                continue
+            choice = choices[0] if isinstance(choices[0], dict) else {}
+            delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else {}
+            content = delta.get("content")
+            if isinstance(content, str):
+                content_parts.append(content)
+        if usage:
+            for key in self.usage_total:
+                self.usage_total[key] += int(usage.get(key, 0))
+        content = "".join(content_parts)
+        if not content:
+            raise RuntimeError("LLM 流式响应没有 content")
+        return content
+
+    @staticmethod
+    def _set_response_timeout(response: Any, timeout: float) -> None:
+        """Best-effort socket deadline tightening for urllib HTTPResponse."""
+        try:
+            response.fp.raw._sock.settimeout(max(0.001, timeout))
+        except (AttributeError, OSError):
+            pass
+
+    def _raise_if_cancelled(self) -> None:
+        if self.cancel_event is not None and self.cancel_event.is_set():
+            raise RuntimeError("LLM 请求已取消")
 
 
 class MockLLMClient(LLMClient):
