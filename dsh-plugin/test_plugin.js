@@ -15,8 +15,16 @@ const clientSrc = fs.readFileSync(path.join(pluginDir, 'client.js'), 'utf8');
 // ---- 1. Verify host.js structure ----
 console.log('[1] host.js structure');
 const hostChecks = [
-  ['WORKSPACE probing', /probeWorkspace|DSH_MAHJONG_WORKSPACE/],
-  ['Python probing', /probePython|DSH_MAHJONG_PYTHON/],
+  ['workspace resolution (config-first)', /CONFIGURED_WORKSPACE|resolveWorkspace/],
+  ['Python resolution', /resolvePython|CONFIGURED_PYTHON/],
+  ['sandbox-safe timer (ctx.timeout)', /ctx\.timeout|scheduleTimeout/],
+  ['harness.defineTool + registerTool', /harness\.registerTool/],
+  ['dynamic output.render content blocks', /type: 'text'/],
+  ["inject declares subprocess/timer/tools", /inject: \['subprocess', 'timer', 'tools'\]/],
+  ['SubprocessHandle.done (no .on(\'exit\'))', /handle\.done\.then/],
+  ['credentials.resolve unwraps { value }', /resolved\.value/],
+  ['session id derives from the tool-call id', /'mj-' \+ String\(exec\.callId\)|sessionIdFor/],
+  ['base URL is plugin config, not tool input', /settings\.baseUrl/],
   ['subprocess spawn', /subprocess\.spawn/],
   ['session.start', /session\.start/],
   ['session.status', /session\.status/],
@@ -26,15 +34,49 @@ const hostChecks = [
   ['mahjong_status tool', /mahjong_status/],
   ['mahjong_cancel tool', /mahjong_cancel/],
   ['mahjong_export tool', /mahjong_export/],
-  ['credentials.resolve', /credentials\.resolve|resolveApiKey/],
-  ['provider URL not exposed as tool input', /baseUrl: LLM_BASE_URL/],
-  ['worker restart (MAX_RESTARTS)', /MAX_RESTARTS/],
+  ['client bridge via harness.handle', /harness\.handle/],
+  ['worker restart (MAX_WORKER_RESTARTS)', /MAX_WORKER_RESTARTS/],
   ['markWorkerDead', /markWorkerDead/],
 ];
-let hostFail = 0;
+// The dynamic-package sandbox traps these; the host half must not reference them.
+const hostForbidden = [
+  ['require()', /\brequire\s*\(/],
+  ['process.', /\bprocess\./],
+  ["node:path / node:fs", /node:(path|fs)/],
+  ['bare setTimeout/setInterval', /(?<!ctx\.)\bset(Timeout|Interval)\s*\(/],
+];let hostFail = 0;
 for (const [name, re] of hostChecks) {
   if (re.test(hostSrc)) console.log(`  ✓ ${name}`);
   else { console.log(`  ✗ ${name} MISSING`); hostFail++; }
+}
+// Comments legitimately name the trapped globals; only executable text matters.
+const hostCode = hostSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+for (const [name, re] of hostForbidden) {
+  if (!re.test(hostCode)) console.log(`  ✓ no ${name} (sandbox-safe)`);
+  else { console.log(`  ✗ ${name} present — the dynamic sandbox traps it`); hostFail++; }
+}
+
+// ---- 1b. profile entry point (index.cjs) ----
+console.log('\n[1b] profile entry point (index.cjs)');
+try {
+  const profilePlugin = require('./index.cjs');
+  const okShape = profilePlugin && typeof profilePlugin.apply === 'function';
+  const okInject = Array.isArray(profilePlugin.inject) && profilePlugin.inject.includes('tools');
+  if (okShape && okInject) {
+    console.log('  \u2713 loads as a cordis plugin (apply + inject=' + JSON.stringify(profilePlugin.inject) + ')');
+  } else {
+    console.log('  \u2717 index.cjs did not export a plugin with apply() and inject including tools');
+    hostFail++;
+  }
+  if (typeof profilePlugin.parseHostPlugin === 'function' && typeof profilePlugin.buildHarness === 'function') {
+    console.log('  \u2713 exposes parseHostPlugin / buildHarness for profile hosts');
+  } else {
+    console.log('  \u2717 missing parseHostPlugin / buildHarness exports');
+    hostFail++;
+  }
+} catch (error) {
+  console.log('  \u2717 index.cjs failed to load: ' + error.message);
+  hostFail++;
 }
 
 // ---- 2. Verify client.js structure ----
@@ -93,12 +135,14 @@ else console.log('  ✗ events injection MISSING');
 console.log('\n===== Plugin Verification Summary =====');
 const totalFail = hostFail + clientFail;
 if (totalFail === 0) {
-  console.log('✓ ALL CHECKS PASSED - DSH plugin is ready for cordis_define');
+  console.log('✓ ALL CHECKS PASSED - DSH plugin structure matches the sandbox contract');
   console.log('');
-  console.log('Register in DSH session:');
-  console.log('  1. cordis_define (host.js + client.js)');
-  console.log('  2. cordis_run pluginId=mjai-1');
-  console.log('  3. Tool.listTools → mahjong_start/status/cancel/export');
+  console.log('Behaviour is covered by:');
+  console.log('  node dsh-plugin/test_host_contract.js   (cordis + ToolRuntime + worker + viewer)');
+  console.log('  node dsh-plugin/test_client_card.js     (slot props + compact card + iframe)');
+  console.log('');
+  console.log('Register in a DSH session:');
+  console.log('  node dsh-plugin/print-register.mjs      (emits the cordis_define payload)');
   process.exit(0);
 } else {
   console.log(`✗ ${totalFail} checks failed`);

@@ -48,21 +48,34 @@ DSH_日本麻将内嵌开发接手卡.md      需求、协议、硬约束、验�
 
 ## 3. DSH 动态插件（重要：进程重启后需重新定义）
 
-`mjai-1/pkg-3`（dsh-mahjong-runtime-live-card）是**会话内动态 Cordis 插件**：
+`dsh-mahjong-runtime-live-card` 是**会话内动态 Cordis 插件**：
 定义与运行状态**不持久**，DSH 进程重启后需在新会话中重新 `cordis_define` + `cordis_run`。
 
-- Host 源码：`dsh-plugin/host.js`（内含常量 `WORKSPACE`/`PYTHON`，按新机器路径修改）
-- Client 源码：`dsh-plugin/client.js`
+- Host 源码：`dsh-plugin/host.js` —— 沙箱里的 async 函数体，没有 `require` / `process` / `fs` /
+  `path` / `setTimeout`；仓库路径改为**运行时 config**，不需要再改源码里的常量。
+- Client 源码：`dsh-plugin/client.js` —— 同样是一个函数体。
+- 载荷生成：`node dsh-plugin/print-register.mjs`（约 4 万字符，手抄必错）
 
-重新接入步骤（任一会话中，使用 cordis 工具）：
-1. `cordis_define` kind=new，idPrefix=`mjai`，name=`dsh-mahjong-runtime`，code.host 取 `plugin-host.js`，code.client 取 `plugin-client.js`
-2. `cordis_run` 激活 → 等待用户批准
+重新接入步骤（任一会话中；需要 DSH 的 creator 模式，即挂载了 `dsh-tool-cordis`）：
+
+1. `cordis_define` kind=new，idPrefix=`mjai`，name=`dsh-mahjong-runtime-live-card`，
+   code.host ← `dsh-plugin/host.js`，code.client ← `dsh-plugin/client.js`
+2. `cordis_run` 激活（需用户批准），**并显式传入 workspace**：
+   `config={"workspace":"<本机仓库绝对路径>"}`
 3. 确认 `Tool.listTools` 出现 `mahjong_start / mahjong_status / mahjong_cancel / mahjong_export`
 
 工具行为：
-- `mahjong_start` 返回卡片状态；Client 以 `callId → mj-<callId>` 关联 session 并轮询 `host.call('mahjong.status')`
-- 卡片为对话区内紧凑卡片，不自动全屏/切路由；"展开牌桌" 为卡片内详情，未接入完整 log-viewer
+
+- `mahjong_start` 返回卡片状态；Client 以 `callId → mj-<callId>` 关联 session 并轮询
+  `host.call('mahjong.status')`
+- 卡片为对话区内紧凑卡片，不自动全屏/切路由；「展开牌桌」展开详情层，并在 `viewerUrl`
+  可用时内嵌 660px 完整 log-viewer iframe
 - API key 只经 DSH `credentials` 注入 worker，不进前端/牌谱/stdout
+
+> **2026-10 修订**：这版把 host/client 对齐到 DSH 动态包沙箱的真实契约
+> （tools 注册形状、`credentials.resolve` 解包、`SubprocessHandle.done`、`inject`、
+> `config.workspace`），并新增 `test_host_contract.js` / `test_client_card.js` 两个
+> 宿主级自动化测试。逐条对照见 `HANDOFF_RESULTS.md`。
 
 ## 4. 当前进度（推送时）
 

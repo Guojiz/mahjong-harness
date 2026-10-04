@@ -7,6 +7,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 export PYTHONPATH="$SCRIPT_DIR/Mortal/mortal:$SCRIPT_DIR"
 export CARGO_HOME="${CARGO_HOME:-$SCRIPT_DIR/.cargo_home}"
 PYTHON="${DSH_MAHJONG_PYTHON:-python3}"
+# 宿主级集成测试需要已安装的 DSH 运行时（cordis / dsh-tools / subprocess-local）。
+# 自动探测 /opt/homebrew、/usr/local 与 ~/.npm-global；可用 DSH_MAHJONG_DSH_ROOT 覆盖。
+# SKIP_PARITY=1 可跳过与真实 subprocess-local 的契约对照。
 
 PASS=0
 FAIL=0
@@ -136,6 +139,16 @@ if node "$SCRIPT_DIR/dsh-plugin/test_plugin.js" >/dev/null 2>&1; then
 else
   fail "DSH 插件结构不完整 — 运行 node dsh-plugin/test_plugin.js 查看详情"
 fi
+if node --check "$SCRIPT_DIR/dsh-plugin/index.cjs" 2>/dev/null; then
+  pass "profile 安装入口 index.cjs 语法有效"
+else
+  fail "index.cjs 语法错误"
+fi
+if OUT=$(node "$SCRIPT_DIR/dsh-plugin/print-register.mjs" --summary 2>&1) && echo "$OUT" | grep -q 'inject=\["subprocess","timer","tools"\]'; then
+  pass "cordis_define 载荷生成器通过沙箱契约自检"
+else
+  fail "print-register.mjs 自检失败"
+fi
 
 # ---- 9. Tile assets ----
 echo ""
@@ -187,6 +200,36 @@ elif [[ -f "$CRED_FILE" ]] && grep -q '^SILICONFLOW_API_KEY:' "$CRED_FILE"; then
   skip "SiliconFlow 冒烟默认关闭；设置 RUN_SILICONFLOW_SMOKE=1 启用"
 else
   skip "SiliconFlow 冒烟: 凭据未配置"
+fi
+
+# ---- 12. DSH client card (real React SSR) ----
+echo ""
+echo "[12] DSH 客户端卡片 (真实 React + react-dom/server)"
+if OUT=$(node "$SCRIPT_DIR/dsh-plugin/test_client_card.js" 2>&1); then
+  if echo "$OUT" | grep -q 'SKIP:'; then
+    skip "客户端卡片测试: 未找到 DSH 自带 react（设置 DSH_MAHJONG_DSH_ROOT）"
+  else
+    N=$(echo "$OUT" | sed -n 's/.*结果: \([0-9][0-9]*\) 通过.*/\1/p' | tail -1)
+    pass "客户端卡片 ${N:-?} 项通过（首屏仅紧凑卡、iframe 按需加载、slot props 契约）"
+  fi
+else
+  fail "客户端卡片测试失败"
+  echo "$OUT" | grep -E '✗' | head -6
+fi
+
+# ---- 13. DSH host-level integration ----
+echo ""
+echo "[13] DSH 宿主级集成 (真实 cordis + ToolRuntime + worker + viewer)"
+if OUT=$(node "$SCRIPT_DIR/dsh-plugin/test_host_contract.js" 2>&1); then
+  if echo "$OUT" | grep -q 'SKIP:'; then
+    skip "宿主级集成测试: 未找到 DSH 运行时（设置 DSH_MAHJONG_DSH_ROOT）"
+  else
+    N=$(echo "$OUT" | sed -n 's/.*结果: \([0-9][0-9]*\) 通过.*/\1/p' | tail -1)
+    pass "宿主集成 ${N:-?} 项通过（四工具注册/紧凑卡片载荷/iframe/取消时延/卸载清理）"
+  fi
+else
+  fail "宿主级集成测试失败"
+  echo "$OUT" | grep -E '✗' | head -8
 fi
 
 echo ""

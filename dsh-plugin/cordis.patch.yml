@@ -1,0 +1,27 @@
+# mahjong-harness-dsh-plugin bundle patch.
+#
+# One Loader row for the mahjong-harness host half. Install this package into a
+# profile, then reference the bundle from that profile's package.json:
+#
+#   "dsh": { "profile": { "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app",
+#                                    "mahjong-harness-dsh-plugin"] } }
+#
+# or with the CLI:
+#
+#   dsh plugin --profile <name> add <path-to-this-directory>
+#
+# The row's config is passed to `apply(ctx, config)` and is where a profile
+# install supplies the repository root, because a profile plugin has no
+# `cordis_run` call to carry it:
+#
+#   config:
+#     workspace: /absolute/path/to/mahjong-harness
+#     python: python3
+#     viewerPort: 8765
+
+- insert:
+    - id: mahjong-harness
+      name: mahjong-harness-dsh-plugin
+      config:
+        viewerHost: 127.0.0.1
+        viewerPort: 8765

@@ -8,6 +8,10 @@ return {
   inject: ['slots', 'timer', 'host'],
   apply(ctx) {
     const React = ctx.React || (typeof window !== 'undefined' && window.React);
+    if (!React || typeof React.createElement !== 'function') {
+      console.log('[mahjong] client half needs React on ctx.React or window.React; card not registered');
+      return;
+    }
     const h = React.createElement;
     const slots = ctx.slots;
     const timer = ctx.timer;
@@ -233,14 +237,38 @@ return {
     }
 
     // ---- Helper functions ----
-    function parseBlock(block) {
+    // `tool.call.toolview` hands the card the call node in `props.block`:
+    //   running: { callId, name, argsRaw }                     (no `kind` field)
+    //   settled: { kind:'tool-result', call:{name,argsRaw}|null, content:[…], isError }
+    // `argsRaw` is a JSON string, never a parsed object.
+    function parseArgs(block) {
       if (!block) return {};
-      if (typeof block === 'object') return block;
-      try { return JSON.parse(block); } catch (_) { return {}; }
+      if (typeof block === 'string') {
+        try { return JSON.parse(block); } catch (_) { return {}; }
+      }
+      if (typeof block !== 'object') return {};
+      var raw = typeof block.argsRaw === 'string' ? block.argsRaw : '';
+      if (!raw && block.call && typeof block.call.argsRaw === 'string') raw = block.call.argsRaw;
+      if (raw) {
+        try { return JSON.parse(raw); } catch (_) { return {}; }
+      }
+      // Tolerate a plain raw-arguments object from simpler harnesses.
+      if (!('kind' in block) && (block.sessionId || block.seed || block.mock)) return block;
+      return {};
     }
 
+    /** The host half derives the mahjong session id from the tool-call id. */
     function derivedSessionId(callId) {
       return callId ? 'mj-' + String(callId) : '';
+    }
+
+    /** Mirror of the slot's own call status: running / ok / error / stopped. */
+    function callStatus(block) {
+      if (!block || typeof block !== 'object') return '';
+      if (!('kind' in block)) return 'running';
+      if (block.error && block.error.code === 'interrupted') return 'stopped';
+      if (block.isError) return 'error';
+      return 'ok';
     }
 
     function eventText(ev) {
@@ -263,8 +291,9 @@ return {
       var exportedHook = React.useState(null);
       var exportedVal = exportedHook[0];
       var setExported = exportedHook[1];
-      var input = parseBlock(props.block);
+      var input = parseArgs(props.block);
       var sessionId = input.sessionId || derivedSessionId(props.callId);
+      var hostStatus = callStatus(props.block);
 
       React.useEffect(function () {
         var alive = true;
@@ -302,7 +331,7 @@ return {
         // Header
         h('div', { className: 'mj-card-head' },
           h('strong', null, '日本麻将对局'),
-          h('span', { className: 'mj-state' }, data.status || 'starting')
+          h('span', { className: 'mj-state' }, data.status || hostStatus || 'starting')
         ),
         // Compact board
         h('div', { className: 'mj-board' },

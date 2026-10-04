@@ -1,100 +1,161 @@
 # DSH 插件注册与运行说明
 
-## 自动安装
+两条接入路径，任选其一：
+
+| 路径 | 得到 | 生命周期 |
+| --- | --- | --- |
+| A. 动态会话插件 | 对话内麻将卡片 **+** 四个工具 | 随 DSH 进程/会话，重启后需重新 `cordis_define` |
+| B. profile 插件包 | **只有**四个工具（没有 Client RPC 桥，因此没有对话卡片） | 持久，随 profile 启动 |
+
+---
+
+## A. 动态会话插件（对话卡片）
+
+### 步骤 0：构建运行时
 
 ```bash
-# 在仓库根目录运行
-bash setup.sh
+bash setup.sh          # 构建 libriichi + 验证环境
+node dsh-plugin/test_host_contract.js   # 可选：本机自检
 ```
 
-这会构建 libriichi、验证 Python 环境并运行协议测试。
+### 步骤 1：生成注册载荷
 
-## 在 DSH 中注册插件
+`host.js` 与 `client.js` 合计约 43 KB，手抄必然出错，用生成器：
 
-DSH 插件是**会话内动态插件**，DSH 进程重启后需重新注册。
-
-### 步骤 1：定义插件
-
-使用 DSH 的 `cordis_define` 工具（在任意 DSH 会话中）：
-
-```
-cordis_define
-  kind: new
-  idPrefix: mjai
-  name: dsh-mahjong-runtime-live-card
-  code.host: 粘贴 dsh-plugin/host.js 的完整内容
-  code.client: 粘贴 dsh-plugin/client.js 的完整内容
+```bash
+node dsh-plugin/print-register.mjs --summary   # 只打印大小与自检结果
+node dsh-plugin/print-register.mjs --out /tmp/mahjong-plugin.json
 ```
 
-> **重要**：`host.js` 会自动探测 workspace 和 Python 路径。如果需要覆盖，在 DSH 环境中设置环境变量：
-> - `DSH_MAHJONG_WORKSPACE`：指向包含 `harness/worker.py` 的仓库根目录
-> - `DSH_MAHJONG_PYTHON`：指向 Python 可执行文件（默认自动探测 `Mortal/.venv/bin/python` 或系统 `python3`）
-> - `DSH_MAHJONG_BASE_URL`：管理员级 provider 覆盖；默认固定为 `https://api.siliconflow.cn/v1`，对话工具不能改写
+生成器会先做沙箱契约自检：`host.js` 必须能作为 async 函数体编译并返回 cordis plugin，
+且不得引用 `require` / `process.` / `setTimeout` / `setInterval` / `fetch`，并且必须声明 `tools` 注入。
 
-### 步骤 2：激活插件
+### 步骤 2：定义插件
+
+在任意 DSH 会话中调用 `cordis_define`：
 
 ```
-cordis_run pluginId=mjai-1
+kind:      new
+idPrefix:  mjai
+name:      dsh-mahjong-runtime-live-card
+code.host:   ← dsh-plugin/host.js 的完整内容
+code.client: ← dsh-plugin/client.js 的完整内容
 ```
 
-需要用户批准后激活。
+### 步骤 3：运行并给出 workspace
 
-### 步骤 3：验证工具
+```
+cordis_run pluginId=<步骤 2 返回的 pluginId>
+           config={"workspace":"/绝对路径/mahjong-harness"}
+```
+
+> **workspace 必须显式给出。** 动态包沙箱里没有 `process` / `fs` / `path` / `__dirname`，
+> 所以 `host.js` 不能再靠环境变量或路径探测找仓库。解析顺序是
+> `config.workspace` → `exec.agent.cwd` → `workspaceRegistry`；三者都拿不到时，
+> 工具会返回一条指明 `config.workspace` 的错误，而不是静默失败。
+>
+> 其余可选 config：`python`（默认 `python3`，Windows 下 `python`）、`viewerHost`（默认 `127.0.0.1`）、
+> `viewerPort`（默认 `8765`）、`baseUrl`（默认 `https://api.siliconflow.cn/v1`）、`model`。
+
+### 步骤 4：验证工具
 
 ```
 Tool.listTools
 ```
 
 应出现四个工具：
+
 - `mahjong_start` — 开始一局日本麻将
 - `mahjong_status` — 查询对局状态
 - `mahjong_cancel` — 取消运行中的对局
 - `mahjong_export` — 导出 MJAI 事件和统计
 
-## 快速测试
-
-注册后，在 DSH 对话中输入：
-
-```
-开始一局日本麻将
-```
-
-或直接调用：
+### 步骤 5：跑一局
 
 ```
 mahjong_start seed=7 mock=true
 ```
 
-预期结果：
-- 对话区出现紧凑麻将卡片（不自动全屏）
-- 卡片显示状态、比分、最近动作
-- 点击「展开牌桌」查看详情（内联紧凑牌桌 + 事件列表）
-- 对局完成后可「导出 MJAI」
+预期：对话区出现紧凑麻将卡片（**不自动全屏**）；点「展开牌桌」后详情层内出现
+`http://127.0.0.1:<viewerPort>/view/mj-<callId>` 的 iframe；对局结束后可「导出 MJAI」。
+
+> 卡片与 host 用同一个 **tool-call id** 关联 session（`mj-<callId>`），所以首帧渲染即可开始轮询。
+> 如果卡片一直停在 `starting`，先确认 `config.workspace` 正确、且 `Mortal/mortal/libriichi.so` 存在。
+
+---
+
+## B. profile 插件包（持久安装，仅工具）
+
+```bash
+dsh plugin --profile <profile> add <path-to-dsh-plugin>
+```
+
+然后在该 profile 的 `package.json` 里把包名加进 bundle 列表：
+
+```json
+{ "dsh": { "profile": { "bundles": [
+  "@deepseek-ai/dsh-base",
+  "@deepseek-ai/dsh-web-app",
+  "mahjong-harness-dsh-plugin"
+] } } }
+```
+
+并给 `dsh-plugin/cordis.patch.yml` 里的 `id: mahjong-harness` 补上 `workspace`：
+
+```yaml
+- insert:
+    - id: mahjong-harness
+      name: mahjong-harness-dsh-plugin
+      config:
+        workspace: /absolute/path/to/mahjong-harness
+        viewerPort: 8765
+```
+
+限制：profile 插件运行在真正的 Node 环境里，没有动态包沙箱，也**没有 Client RPC 桥**，
+所以 `client.js` 的对话卡片在这条路径下不可用；`harness.handle` 注册的处理器会挂在
+`require('mahjong-harness-dsh-plugin').handlers` 上供宿主直接调用。
+
+---
 
 ## 独立回放器
 
-完整 660px 牌桌回放器：
-1. 启动日志服务器：`python3 -m harness.serve_logs`
-2. 浏览器打开 `http://localhost:8765/index.html`
-3. 拖放导出的 `.mjai` 文件或访问 `http://localhost:8765/view/<sessionId>`
+```bash
+python3 -m harness.serve_logs          # 默认 127.0.0.1:8765
+```
 
-或直接浏览器打开：`dsh-plugin/log-viewer/index.html`
+- `http://localhost:8765/index.html` — 拖放导出的 `.mjai`
+- `http://localhost:8765/view/<sessionId>` — 直接看某一局
+- 也可直接浏览器打开 `dsh-plugin/log-viewer/index.html`
 
 ## 故障排查
 
 | 问题 | 检查 |
 |------|------|
-| worker 启动失败 | `host.js` 日志中的 workspace/python 路径；确认 `Mortal/mortal/libriichi.so` 存在 |
-| libriichi 导入失败 | `PYTHONPATH` 未包含 `Mortal/mortal/`；运行 `bash setup.sh` 重新构建 |
-| 工具不出现 | 确认 `cordis_run` 已执行且批准；检查 `cordis_define` 的 idPrefix |
-| 卡片不更新 | worker 是否崩溃？检查 `host.js` 最多自动重启 5 次 |
-| 真实 LLM 不工作 | DSH credentials 中需有 `namespace=mahjong, name=LLM_API_KEY` 或环境变量 `LLM_API_KEY` |
+| `cordis_define` 报语法错 | 用 `node dsh-plugin/print-register.mjs` 的输出去贴，别手抄 |
+| `cordis_run` 后工具没出现 | 查看 fiber 是否停在 pending：`inject` 需要 `subprocess` / `timer` / `tools` 三个服务都在 |
+| 工具报「无法确定仓库路径」 | `cordis_run` 的 config 少了 `workspace` |
+| worker 启动失败 | `config.python` 是否正确；`Mortal/mortal/libriichi.so` 是否存在；`bash setup.sh` |
+| libriichi 导入失败 | `PYTHONPATH` 未含 `Mortal/mortal/`；`host.js` 会自动带上，手动跑时需自行设置 |
+| 卡片不更新 | worker 是否崩溃？`host.js` 最多自动重启 5 次；可先 `mahjong_status` 看 `error` |
+| 真实 LLM 不工作 | DSH credentials 中需有 `namespace=mahjong, name=LLM_API_KEY`；没有就用 `mock=true` |
+| 端口被占 | `config.viewerPort` 换一个；`host.js` 会在 viewer 退出后最多重启 3 次 |
 
 ## 凭据配置
 
-API key 可通过以下任一方式提供（优先级从高到低）：
+优先级：
+
 1. DSH `credentials.resolve({ namespace: 'mahjong', name: 'LLM_API_KEY' })`
-2. 环境变量 `LLM_API_KEY`
+   —— 返回 `{ value, source }`，`host.js` 会取 `.value`
+2. 都没有则 apiKey 传空字符串，规则引擎兜底
 
 默认模型：`deepseek-ai/DeepSeek-V4-Flash`
-默认 Base URL：`https://api.siliconflow.cn/v1`
+默认 Base URL：`https://api.siliconflow.cn/v1`（**不是**工具入参，模型无法改写）
+
+## 自动化验收
+
+| 命令 | 覆盖 |
+| --- | --- |
+| `node dsh-plugin/test_plugin.js` | 静态结构 + 沙箱禁用 API 检查 |
+| `node dsh-plugin/test_client_card.js` | 真实 React SSR：首屏仅紧凑卡、展开才加载 iframe、slot props 契约 |
+| `node dsh-plugin/test_host_contract.js` | 真实 cordis + `ToolRuntime` + `subprocess-local` + worker + viewer：四工具注册、卡片载荷、iframe/事件 API、取消时延、卸载清理 |
+| `bash verify.sh` | 上面全部 + Python 规则引擎/协议/回放安全 |

@@ -1,8 +1,23 @@
 {
   "plugin": {
-    "kind": "existing",
-    "pluginId": "mjai-1"
+    "kind": "new",
+    "idPrefix": "mjai"
   },
   "name": "dsh-mahjong-runtime-live-card",
-  "purpose": "保留麻将 worker 与工具 Host 能力，并提供可实时关联 session 的紧凑卡片和显式 MJAI 导出。"
+  "inject": ["subprocess", "timer", "tools"],
+  "config": {
+    "workspace": "<absolute path to the mahjong-harness checkout>",
+    "python": "python3",
+    "viewerHost": "127.0.0.1",
+    "viewerPort": 8765,
+    "baseUrl": "https://api.siliconflow.cn/v1",
+    "model": "deepseek-ai/DeepSeek-V4-Flash"
+  },
+  "code": {
+    "host": "dsh-plugin/host.js",
+    "client": "dsh-plugin/client.js"
+  },
+  "generator": "node dsh-plugin/print-register.mjs",
+  "purpose": "保留麻将 worker 与工具 Host 能力，并提供可实时关联 session 的紧凑卡片和显式 MJAI 导出。",
+  "note": "kind=new 而非 existing：2026-10 这版改了 inject 与工具形状，必须作为新 Package 定义；同一个 Plugin 内不能覆盖旧 Package。"
 }

@@ -26,7 +26,14 @@ DeepSeek Harness 内嵌日本麻将运行时：对话内实时卡片、MJAI 导�
 
 插件注册四个工具：`mahjong_start` / `mahjong_status` / `mahjong_cancel` / `mahjong_export`。
 
-换电脑时优先设置环境变量 `DSH_MAHJONG_WORKSPACE`（可选），`host.js` 会自动探测含 `harness/worker.py` 的目录；并准备好 `Mortal/mortal/libriichi.so`（macOS/Linux）或 `libriichi.pyd`（Windows）。
+DSH 动态包沙箱里没有 `process` / `fs` / `path`，所以仓库路径必须由 `cordis_run` 的 config 显式给出：
+
+```
+cordis_run pluginId=<id> config={"workspace":"/绝对路径/mahjong-harness"}
+```
+
+同时准备好 `Mortal/mortal/libriichi.so`（macOS/Linux）或 `libriichi.pyd`（Windows）——`bash setup.sh` 会构建它。
+其余可选配置：`python` / `viewerHost` / `viewerPort` / `baseUrl` / `model`。
 
 ## 快速安装（macOS / Linux）
 
@@ -69,10 +76,30 @@ bash verify.sh
 | 规则引擎冒烟 | ✓ 通过 | OneVsThree arena |
 | Mock 固定 seed (seeds 7,8,9) | ✓ 通过 | 12 半庄, 顺位 3/3/3/3, 违规 0 |
 | 非法动作拦截 (noise=1.0) | ✓ 通过 | 840/840 被 validate_reaction() 拦截 |
-| DSH 插件语法 | ✓ 通过 | host.js + client.js Node.js 检查 |
+| DSH 插件语法 + 沙箱禁令 | ✓ 通过 | host.js + client.js 语法，且不引用 `require`/`process`/`setTimeout`/`fetch` |
+| DSH 客户端卡片 (真实 React SSR) | ✓ 通过 | 11/11：首屏仅紧凑卡、iframe 按需加载、`argsRaw`/运行态/失败态 slot props |
+| DSH 宿主级集成 | ✓ 通过 | 17/17：真实 cordis + ToolRuntime 四工具注册、卡片载荷、viewer iframe/事件 API、取消时延、卸载清理 |
 | CC0 牌面素材 | ✓ 通过 | 40 SVG, 无旧素材引用 |
 | SiliconFlow 真实冒烟 | ✓ 历史实测 | DeepSeek-V4-Flash 合法动作通过 `validate_reaction()`；默认验收不重复调用付费/限速 API |
-| DSH 内工具注册 | ○ 待验证 | 需在 DSH 会话中 cordis_define + cordis_run |
+| 真实 DSH 会话内注册 | ○ 需人工 | 在 DSH 会话里 `cordis_define` + `cordis_run` 并肉眼确认卡片（注册步骤见 `dsh-plugin/REGISTER.md`） |
+
+### DSH 插件测试
+
+```bash
+node dsh-plugin/test_plugin.js         # 静态结构 + 沙箱禁用 API
+node dsh-plugin/test_client_card.js    # 真实 React SSR：紧凑卡 / 展开 iframe / slot props
+node dsh-plugin/test_host_contract.js  # 真实 cordis + ToolRuntime + subprocess-local + worker + viewer
+```
+
+`test_host_contract.js` 需要机器上装有 DSH 运行时（自动探测 `/opt/homebrew`、`/usr/local`、`~/.npm-global`，
+可用 `DSH_MAHJONG_DSH_ROOT` 覆盖；`SKIP_PARITY=1` 跳过与真实 `subprocess-local` 的句柄契约对照）。
+
+生成 `cordis_define` 载荷：
+
+```bash
+node dsh-plugin/print-register.mjs --summary   # 大小 + 契约自检
+node dsh-plugin/print-register.mjs --out /tmp/mahjong-plugin.json
+```
 
 实时 API 冒烟为显式启用项：
 

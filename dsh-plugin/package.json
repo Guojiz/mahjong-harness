@@ -1,0 +1,43 @@
+{
+  "name": "mahjong-harness-dsh-plugin",
+  "version": "0.2.0",
+  "description": "DSH Cordis plugin: in-chat Japanese mahjong runtime with four tools over the mahjong-harness JSONL worker",
+  "license": "MIT",
+  "main": "index.cjs",
+  "files": [
+    "index.cjs",
+    "host.js",
+    "client.js",
+    "cordis.patch.yml",
+    "REGISTER.md",
+    "README.md",
+    "log-viewer"
+  ],
+  "keywords": [
+    "dsh",
+    "cordis",
+    "mahjong",
+    "mjai",
+    "libriichi"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-tools": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "test": "node test_host_contract.js && node test_client_card.js"
+  }
+}
