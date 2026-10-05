@@ -92,7 +92,8 @@ if (summaryOnly) {
   console.log('payload   : ' + bytes(JSON.stringify(payload)) + ' bytes');
   console.log('');
   console.log('下一步: cordis_define(kind="new", idPrefix="mjai", name=…, code.host=host.js, code.client=client.js)');
-  console.log('然后:   cordis_run pluginId=<返回的 pluginId> config={"workspace":"' + path.resolve(here, '..') + '"}');
+  console.log('然后:   cordis_run pluginId=<返回的 pluginId>   （不传 config；运行器不支持）');
+  console.log('开局:   在仓库目录启动 DSH 即可 mahjong_start seed=7 mock=true；否则加 workspace="' + path.resolve(here, '..') + '"');
   process.exit(0);
 }
 

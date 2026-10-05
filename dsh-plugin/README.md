@@ -39,8 +39,11 @@ DSH 动态包沙箱比 Node 窄得多，旧版实现有四处必然失败：
    PATH 由 subprocess 服务自己的 scrubbed parent env 提供。
 6. `setTimeout` 被 trap → 请求超时改用 `ctx.timeout`（需要 `inject: ['timer']`）。
 7. `ctx.tools` 必须先 `inject: ['tools']`，否则 cordis 直接拒绝属性访问。
-8. workspace 无法再靠 `process.env` / `__dirname` 探测 → 改为 `cordis_run` 的 config 优先，
-   再回退到 `exec.agent.cwd` 与 `workspaceRegistry`。
+8. workspace 无法再靠 `process.env` / `__dirname` 探测，**且动态路径的 `cordis_run` 不传 config**
+   （`ctx.plugin(guardedPlugin(plugin))` 无第二参数）→ `mahjong_start.workspace` 参数 → profile `config.workspace`
+   → `exec.agent.session.header.cwd` → `workspaceRegistry`。
+9. 工具/桥接处理器的返回值会被沙箱做「无损 JSON」校验，`undefined` 成员直接报错 → 出口统一过 `plain()`。
+   （真实运行器测试抓到的；回放替身现已同步强制该规则。）
 
 ## 注册
 
@@ -56,11 +59,13 @@ cordis_define  kind="new" idPrefix="mjai"
                code.host   ← dsh-plugin/host.js
                code.client ← dsh-plugin/client.js
 
-cordis_run     pluginId=<上一步返回的 id>
-               config={"workspace":"/绝对路径/mahjong-harness"}
+cordis_run     pluginId=<上一步返回的 id>      # 不需要也不支持传 config
+
+mahjong_start  seed=7 mock=true                # 在仓库目录启动 DSH 时无需 workspace
+mahjong_start  workspace="/绝对路径/mahjong-harness" seed=7 mock=true   # 会话 cwd 不在仓库时
 ```
 
-`config` 支持：`workspace`、`python`、`viewerHost`、`viewerPort`、`baseUrl`、`model`。
+`mahjong_start` 可选参数：`seed`、`mock`、`budget`、`model`、`workspace`、`python`、`viewerPort`。profile 路径另支持 `config.{workspace,python,viewerHost,viewerPort,baseUrl,model}`。
 
 ## profile 持久安装
 
@@ -75,7 +80,8 @@ dsh plugin --profile <name> add <本目录>
 ```bash
 node dsh-plugin/test_plugin.js         # 静态结构 + 沙箱禁令
 node dsh-plugin/test_client_card.js    # 真实 React SSR：首屏紧凑卡、iframe 按需
-node dsh-plugin/test_host_contract.js  # 真实 cordis + ToolRuntime + worker + viewer
+node dsh-plugin/test_host_contract.js  # 真实 cordis + ToolRuntime + worker + viewer（沙箱替身）
+node dsh-plugin/test_dynamic_runner.js # 真实 DynamicCordisRunnerService：define → run → stop
 ```
 
 `test_host_contract.js` 需要机器上已安装 DSH 运行时；它按 `/opt/homebrew`、`/usr/local`、

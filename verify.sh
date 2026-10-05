@@ -232,6 +232,21 @@ else
   echo "$OUT" | grep -E '✗' | head -8
 fi
 
+# ---- 14. DSH real dynamic runner (cordis_define / cordis_run path) ----
+echo ""
+echo "[14] DSH 动态插件真实运行器 (DynamicCordisRunnerService define/run/stop)"
+if OUT=$(node "$SCRIPT_DIR/dsh-plugin/test_dynamic_runner.js" 2>&1); then
+  if echo "$OUT" | grep -q 'SKIP:'; then
+    skip "动态运行器测试: 未找到 DSH 运行时（设置 DSH_MAHJONG_DSH_ROOT）"
+  else
+    N=$(echo "$OUT" | sed -n 's/.*结果: \([0-9][0-9]*\) 通过.*/\1/p' | tail -1)
+    pass "动态运行器 ${N:-?} 项通过（真实 define/run/stop、零 config 开局、卸载清理）"
+  fi
+else
+  fail "动态运行器测试失败"
+  echo "$OUT" | grep -E '✗' | head -8
+fi
+
 echo ""
 echo "============================================"
 echo " 结果: $PASS 通过, $FAIL 失败, $SKIP 跳过 (共 $TOTAL 项)"

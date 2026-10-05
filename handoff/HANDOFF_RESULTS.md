@@ -11,8 +11,9 @@
 - Python 协议、崩溃、状态、回放安全和流式客户端：14/14 通过
 - DSH 插件静态结构 + 沙箱禁用 API 检查：通过
 - DSH 客户端卡片（真实 React 18 SSR）：11/11 通过
-- DSH 宿主级集成（真实 cordis + ToolRuntime + subprocess-local + worker + viewer）：17/17 通过
-- `bash verify.sh`：20 通过、0 失败、1 跳过，exit 0；跳过项是默认关闭的实时 API 请求
+- DSH 宿主级集成（真实 cordis + ToolRuntime + subprocess-local + worker + viewer）：19/19 通过
+- DSH 动态插件真实运行器（`DynamicCordisRunnerService` define → run → stop）：17/17 通过
+- `bash verify.sh`：21 通过、0 失败、1 跳过，exit 0；跳过项是默认关闭的实时 API 请求
 
 ## 已完成
 
@@ -40,9 +41,10 @@
 | 6 | `inject:['subprocess']`，直接读 `ctx.tools` | cordis 拒绝未注入的属性访问；`tools` 必须注入 | `inject:['subprocess','timer','tools']` |
 | 7 | `credentials.resolve()` 当字符串用 | 返回 `{ value, source } \| undefined` | 解包 `.value` |
 | 8 | `proc.on('exit', …)` | `SubprocessHandle` 没有 `.on`，退出是 `handle.done` | 改用 `handle.done.then(...)` |
-| 9 | workspace 靠 `__dirname` / 环境变量探测 | 沙箱里两者都不存在 | `cordis_run` 的 `config.workspace` 优先，回退 `exec.agent.cwd` / `workspaceRegistry` |
+| 9 | workspace 靠 `__dirname` / 环境变量探测 | 沙箱里两者都不存在 | `mahjong_start.workspace` 参数 → profile `config.workspace` → `exec.agent.session.header.cwd` → `workspaceRegistry`（**`cordis_run` 不传 config**，由真实运行器源码确认） |
 | 10 | session id = 时间戳+随机数 | — | 改为 `mj-<callId>`，与 Client 的 `derivedSessionId(callId)` 对齐 |
 | 11 | client 从 `props.block` 直接当入参对象 | 真实 slot props：`block` 是调用节点，入参在 `argsRaw`（JSON 字符串）；结束态在 `block.call.argsRaw` | 新增 `parseArgs()` + `callStatus()` |
+| 12 | 工具返回值含 `undefined` 成员（`events`/`viewerUrl`） | 沙箱对 execute/handle 返回值做「无损 JSON」校验，`undefined` 直接报错 | 出口统一过 `plain()`；**由真实运行器测试抓到，回放替身原先漏检，现已同步强制** |
 
 ## SiliconFlow 真实记录
 

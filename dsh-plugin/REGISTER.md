@@ -42,20 +42,22 @@ code.host:   ← dsh-plugin/host.js 的完整内容
 code.client: ← dsh-plugin/client.js 的完整内容
 ```
 
-### 步骤 3：运行并给出 workspace
+### 步骤 3：运行
 
 ```
 cordis_run pluginId=<步骤 2 返回的 pluginId>
-           config={"workspace":"/绝对路径/mahjong-harness"}
 ```
 
-> **workspace 必须显式给出。** 动态包沙箱里没有 `process` / `fs` / `path` / `__dirname`，
-> 所以 `host.js` 不能再靠环境变量或路径探测找仓库。解析顺序是
-> `config.workspace` → `exec.agent.cwd` → `workspaceRegistry`；三者都拿不到时，
-> 工具会返回一条指明 `config.workspace` 的错误，而不是静默失败。
+> **`cordis_run` 不向插件传 config**（运行器内部是 `ctx.plugin(guardedPlugin(plugin))`，无第二参数），
+> 沙箱里又没有 `process` / `fs` / `path` / `__dirname`。所以仓库路径按以下顺序解析：
 >
-> 其余可选 config：`python`（默认 `python3`，Windows 下 `python`）、`viewerHost`（默认 `127.0.0.1`）、
-> `viewerPort`（默认 `8765`）、`baseUrl`（默认 `https://api.siliconflow.cn/v1`）、`model`。
+> 1. `mahjong_start` 的 `workspace` 参数；
+> 2. profile 路径的 `config.workspace`；
+> 3. 调用会话的 cwd（`exec.agent.session.header.cwd`）——**在仓库目录里启动 DSH 就不用配**；
+> 4. 第一个已注册 workspace。
+>
+> 都拿不到时工具会报「无法确定仓库路径」并指明 `mahjong_start workspace=…`，而不是静默失败。
+> `python`（默认 `python3`，Windows 为 `python`）与 `viewerPort`（默认 `8765`）同样可作为 `mahjong_start` 参数。
 
 ### 步骤 4：验证工具
 
@@ -80,7 +82,7 @@ mahjong_start seed=7 mock=true
 `http://127.0.0.1:<viewerPort>/view/mj-<callId>` 的 iframe；对局结束后可「导出 MJAI」。
 
 > 卡片与 host 用同一个 **tool-call id** 关联 session（`mj-<callId>`），所以首帧渲染即可开始轮询。
-> 如果卡片一直停在 `starting`，先确认 `config.workspace` 正确、且 `Mortal/mortal/libriichi.so` 存在。
+> 如果卡片一直停在 `starting`，先确认仓库路径解析正确（见步骤 3）、且 `Mortal/mortal/libriichi.so` 存在。
 
 ---
 
@@ -133,7 +135,7 @@ python3 -m harness.serve_logs          # 默认 127.0.0.1:8765
 |------|------|
 | `cordis_define` 报语法错 | 用 `node dsh-plugin/print-register.mjs` 的输出去贴，别手抄 |
 | `cordis_run` 后工具没出现 | 查看 fiber 是否停在 pending：`inject` 需要 `subprocess` / `timer` / `tools` 三个服务都在 |
-| 工具报「无法确定仓库路径」 | `cordis_run` 的 config 少了 `workspace` |
+| 工具报「无法确定仓库路径」 | 会话 cwd 不在仓库：给 `mahjong_start` 传 `workspace=` |
 | worker 启动失败 | `config.python` 是否正确；`Mortal/mortal/libriichi.so` 是否存在；`bash setup.sh` |
 | libriichi 导入失败 | `PYTHONPATH` 未含 `Mortal/mortal/`；`host.js` 会自动带上，手动跑时需自行设置 |
 | 卡片不更新 | worker 是否崩溃？`host.js` 最多自动重启 5 次；可先 `mahjong_status` 看 `error` |
@@ -157,5 +159,6 @@ python3 -m harness.serve_logs          # 默认 127.0.0.1:8765
 | --- | --- |
 | `node dsh-plugin/test_plugin.js` | 静态结构 + 沙箱禁用 API 检查 |
 | `node dsh-plugin/test_client_card.js` | 真实 React SSR：首屏仅紧凑卡、展开才加载 iframe、slot props 契约 |
+| `node dsh-plugin/test_dynamic_runner.js` | **真实 `DynamicCordisRunnerService`**：`define` → `run`（真实沙箱 + 声明式 inject 守卫）→ 零 config 开局 → `stop` 后工具注销、子进程回收、端口释放 |
 | `node dsh-plugin/test_host_contract.js` | 真实 cordis + `ToolRuntime` + `subprocess-local` + worker + viewer：四工具注册、卡片载荷、iframe/事件 API、取消时延、卸载清理 |
 | `bash verify.sh` | 上面全部 + Python 规则引擎/协议/回放安全 |

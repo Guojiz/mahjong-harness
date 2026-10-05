@@ -4,9 +4,14 @@
     "idPrefix": "mjai"
   },
   "name": "dsh-mahjong-runtime-live-card",
-  "inject": ["subprocess", "timer", "tools"],
+  "inject": [
+    "subprocess",
+    "timer",
+    "tools"
+  ],
   "config": {
-    "workspace": "<absolute path to the mahjong-harness checkout>",
+    "_note": "cordis_run passes no config to dynamic plugins. These keys apply only to the profile install (cordis.patch.yml); on the dynamic path use mahjong_start arguments (workspace/python/viewerPort/model) or launch DSH inside the repo.",
+    "workspace": "<absolute path>",
     "python": "python3",
     "viewerHost": "127.0.0.1",
     "viewerPort": 8765,

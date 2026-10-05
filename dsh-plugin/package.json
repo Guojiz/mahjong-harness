@@ -38,6 +38,6 @@
     }
   },
   "scripts": {
-    "test": "node test_host_contract.js && node test_client_card.js"
+    "test": "node test_plugin.js && node test_client_card.js && node test_host_contract.js && node test_dynamic_runner.js"
   }
 }

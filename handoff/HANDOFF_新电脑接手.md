@@ -60,8 +60,8 @@ DSH_日本麻将内嵌开发接手卡.md      需求、协议、硬约束、验�
 
 1. `cordis_define` kind=new，idPrefix=`mjai`，name=`dsh-mahjong-runtime-live-card`，
    code.host ← `dsh-plugin/host.js`，code.client ← `dsh-plugin/client.js`
-2. `cordis_run` 激活（需用户批准），**并显式传入 workspace**：
-   `config={"workspace":"<本机仓库绝对路径>"}`
+2. `cordis_run` 激活（本插件无 client 半边外的审批以 DSH 提示为准；**`cordis_run` 不传 config**）
+   仓库路径：在仓库目录里启动 DSH 即可；否则 `mahjong_start workspace="<本机仓库绝对路径>"`
 3. 确认 `Tool.listTools` 出现 `mahjong_start / mahjong_status / mahjong_cancel / mahjong_export`
 
 工具行为：
@@ -74,8 +74,8 @@ DSH_日本麻将内嵌开发接手卡.md      需求、协议、硬约束、验�
 
 > **2026-10 修订**：这版把 host/client 对齐到 DSH 动态包沙箱的真实契约
 > （tools 注册形状、`credentials.resolve` 解包、`SubprocessHandle.done`、`inject`、
-> `config.workspace`），并新增 `test_host_contract.js` / `test_client_card.js` 两个
-> 宿主级自动化测试。逐条对照见 `HANDOFF_RESULTS.md`。
+> `mahjong_start.workspace` / 会话 cwd），并新增 `test_host_contract.js` / `test_client_card.js` /
+> `test_dynamic_runner.js` 三个宿主级自动化测试。逐条对照见 `HANDOFF_RESULTS.md`。
 
 ## 4. 当前进度（推送时）
 

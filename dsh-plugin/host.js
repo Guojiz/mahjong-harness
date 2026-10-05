@@ -16,7 +16,7 @@
  *
  * Consequences the code below honours:
  *   - no path/fs/process → the workspace and the Python executable come from the
- *     plugin config (`cordis_run` config) with a best-effort live probe;
+ *     the `mahjong_start` arguments / profile config / session cwd (`cordis_run` passes no config);
  *   - no setTimeout → request timeouts use `ctx.timeout` (fiber-scoped, disposed with the run);
  *   - no process.env → child environment carries only PYTHONPATH / PYTHONDONTWRITEBYTECODE;
  *     the subprocess service inherits its own scrubbed parent environment (PATH included);
@@ -34,6 +34,15 @@ const DEFAULT_BASE_URL = 'https://api.siliconflow.cn/v1';
 const REQUEST_TIMEOUT_MS = 120000;
 const MAX_WORKER_RESTARTS = 5;
 const MAX_VIEWER_RESTARTS = 3;
+
+/**
+ * The sandbox JSON-clones every tool result and bridge-handler result and rejects
+ * `undefined` members ("lossless JSON data"). A round-trip drops them, so every
+ * value that leaves this plugin goes through it.
+ */
+function plain(value) {
+  return JSON.parse(JSON.stringify(value === undefined ? null : value));
+}
 
 function isObject(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -65,7 +74,7 @@ return {
   apply(ctx, config) {
     const settings = isObject(config) ? config : {};
     const VIEWER_HOST = settings.viewerHost === 'localhost' ? 'localhost' : DEFAULT_VIEWER_HOST;
-    const VIEWER_PORT = normalizePort(settings.viewerPort, DEFAULT_VIEWER_PORT);
+    let VIEWER_PORT = normalizePort(settings.viewerPort, DEFAULT_VIEWER_PORT);
     const BASE_URL = typeof settings.baseUrl === 'string' && settings.baseUrl ? settings.baseUrl : DEFAULT_BASE_URL;
     const MODEL = typeof settings.model === 'string' && settings.model ? settings.model : DEFAULT_MODEL;
     const CONFIGURED_WORKSPACE = typeof settings.workspace === 'string' ? settings.workspace : '';
@@ -83,6 +92,7 @@ return {
     let viewerRestartCount = 0;
     let buffer = '';
     let workspaceCache = '';
+    let pythonOverride = '';
     let lastExec;
 
     function workspaceFromExec(exec) {
@@ -91,7 +101,14 @@ return {
       if (isObject(agent)) {
         if (typeof agent.cwd === 'string' && agent.cwd) return agent.cwd;
         if (isObject(agent.meta) && typeof agent.meta.cwd === 'string' && agent.meta.cwd) return agent.meta.cwd;
-        if (isObject(agent.session) && typeof agent.session.cwd === 'string' && agent.session.cwd) return agent.session.cwd;
+        const session = agent.session;
+        if (isObject(session)) {
+          if (typeof session.cwd === 'string' && session.cwd) return session.cwd;
+          // `Agent.session` is a real Session; its durable header carries the cwd.
+          if (isObject(session.header) && typeof session.header.cwd === 'string' && session.header.cwd) {
+            return session.header.cwd;
+          }
+        }
       }
       if (typeof exec.cwd === 'string' && exec.cwd) return exec.cwd;
       return '';
@@ -122,16 +139,24 @@ return {
     }
 
     /**
-     * The repository root holding `harness/worker.py`. The sandbox cannot read the
-     * filesystem or the environment, so this is config-first and probe-second.
+     * The repository root holding `harness/worker.py`.
+     *
+     * The sandbox cannot read the filesystem or the environment, and the dynamic
+     * `cordis_run` path passes NO plugin config (`DynamicCordisRunnerService.run`
+     * mounts the host half with `ctx.plugin(guardedPlugin(plugin))`), so the order is:
+     *   1. `mahjong_start`'s explicit `workspace` argument,
+     *   2. the profile-path `config.workspace`,
+     *   3. the calling agent's session cwd (`exec.agent.session.header.cwd`),
+     *   4. the first registered workspace.
      */
     function resolveWorkspace(exec) {
       if (workspaceCache) return workspaceCache;
       const candidate = CONFIGURED_WORKSPACE || workspaceFromExec(exec) || workspaceFromRegistry();
       if (!candidate) {
         throw new Error(
-          'mahjong-harness: 无法确定仓库路径。请在 cordis_run 的 config 中提供 workspace，' +
-            '例如 cordis_run pluginId=<id> config={"workspace":"/绝对路径/mahjong-harness"}。'
+          'mahjong-harness: 无法确定仓库路径。请在 mahjong_start 里显式传入 workspace，' +
+            '例如 mahjong_start workspace="/绝对路径/mahjong-harness" seed=7 mock=true；' +
+            'profile 安装路径也可以改用 config.workspace。'
         );
       }
       workspaceCache = String(candidate).replace(/[\\/]+$/, '');
@@ -139,6 +164,7 @@ return {
     }
 
     function resolvePython(workspace) {
+      if (pythonOverride) return pythonOverride;
       if (CONFIGURED_PYTHON) return CONFIGURED_PYTHON;
       return looksLikeWindows(workspace) ? 'python' : 'python3';
     }
@@ -380,6 +406,15 @@ return {
     async function start(args, exec) {
       const input = isObject(args) ? args : {};
       if (exec) lastExec = exec;
+      // The dynamic path cannot deliver plugin config, so the tool call itself is the
+      // supported place to name the checkout when the session cwd is not the repo.
+      if (typeof input.workspace === 'string' && input.workspace) {
+        workspaceCache = input.workspace.replace(/[\\/]+$/, '');
+      }
+      if (typeof input.python === 'string' && input.python) pythonOverride = input.python;
+      if (input.viewerPort !== undefined && input.viewerPort !== null) {
+        VIEWER_PORT = normalizePort(input.viewerPort, VIEWER_PORT);
+      }
       ensureViewer(exec);
       const apiKey = await resolveApiKey();
       const sessionId = sessionIdFor(exec);
@@ -479,10 +514,16 @@ return {
           mock: { type: 'boolean', description: 'true 时用规则引擎代替真实 LLM' },
           budget: { type: 'number', description: '真实 LLM 调用预算上限' },
           model: { type: 'string', description: 'OpenAI-compatible 模型 ID' },
+          workspace: {
+            type: 'string',
+            description: 'mahjong-harness 仓库绝对路径；动态插件路径拿不到 config，会话 cwd 不在仓库时用它显式指定',
+          },
+          python: { type: 'string', description: 'Python 可执行文件，默认 python3' },
+          viewerPort: { type: 'number', description: '本机回放服务端口，默认 8765' },
         },
         output: OUTPUT,
         async execute(args, exec) {
-          return start(args, exec);
+          return plain(await start(args, exec));
         },
       })
     );
@@ -495,7 +536,7 @@ return {
         parameters: { sessionId: { type: 'string', required: true, description: 'mahjong_start 返回的 sessionId' } },
         output: OUTPUT,
         async execute(args, exec) {
-          return status(args, exec);
+          return plain(await status(args, exec));
         },
       })
     );
@@ -508,7 +549,7 @@ return {
         parameters: { sessionId: { type: 'string', required: true, description: '要取消的 sessionId' } },
         output: OUTPUT,
         async execute(args, exec) {
-          return cancel(args, exec);
+          return plain(await cancel(args, exec));
         },
       })
     );
@@ -521,16 +562,16 @@ return {
         parameters: { sessionId: { type: 'string', required: true, description: '要导出的 sessionId' } },
         output: OUTPUT,
         async execute(args, exec) {
-          return exportSession(args, exec);
+          return plain(await exportSession(args, exec));
         },
       })
     );
 
     // Client half bridge: the browser card polls through `host.call(...)`.
     if (harness && typeof harness.handle === 'function') {
-      harness.handle('mahjong.status', async (args) => status(args, lastExec));
-      harness.handle('mahjong.export', async (args) => exportSession(args, lastExec));
-      harness.handle('mahjong.cancel', async (args) => cancel(args, lastExec));
+      harness.handle('mahjong.status', async (args) => plain(await status(args, lastExec)));
+      harness.handle('mahjong.export', async (args) => plain(await exportSession(args, lastExec)));
+      harness.handle('mahjong.cancel', async (args) => plain(await cancel(args, lastExec)));
     }
 
     ctx.effect(function () {

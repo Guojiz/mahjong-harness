@@ -34,13 +34,9 @@
 
 const assert = require('node:assert');
 const fs = require('node:fs');
-const net = require('node:net');
-const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { spawn } = require('node:child_process');
-const { pathToFileURL } = require('node:url');
-const { createRequire } = require('node:module');
 
 const PLUGIN_DIR = __dirname;
 const REPO = path.resolve(PLUGIN_DIR, '..');
@@ -76,40 +72,21 @@ async function check(name, fn) {
 }
 
 /* ------------------------------------------------------------------ *
- * DSH runtime resolution
+ * Shared helpers: real-runtime resolution + contract-faithful doubles
  * ------------------------------------------------------------------ */
 
-const HOME = os.homedir();
-const DSH_SEARCH_ROOTS = [
-  process.env.DSH_MAHJONG_DSH_ROOT,
-  '/opt/homebrew/lib/node_modules/@deepseek-ai/dsh',
-  '/usr/local/lib/node_modules/@deepseek-ai/dsh',
-  path.join(HOME, '.npm-global/lib/node_modules/@deepseek-ai/dsh'),
-  path.join(HOME, '.dsh/profiles'),
-].filter(Boolean);
-
-function resolveFromDshInstall(name) {
-  for (const root of DSH_SEARCH_ROOTS) {
-    for (const candidate of [path.join(root, 'node_modules', name), path.join(root, name)]) {
-      try {
-        return require.resolve(candidate);
-      } catch (_) {}
-    }
-  }
-  return '';
-}
-
-async function loadEsm(spec, fromFile) {
-  const requireFrom = createRequire(fromFile);
-  let resolved = '';
-  try {
-    resolved = requireFrom.resolve(spec);
-  } catch (_) {
-    resolved = resolveFromDshInstall(spec);
-  }
-  if (!resolved) return null;
-  return import(pathToFileURL(resolved).href);
-}
+const {
+  resolveFromDshInstall,
+  loadEsm,
+  createSubprocessService,
+  createCredentialsService,
+  createSystemPromptService,
+  freePort,
+  httpGet,
+  portRefuses,
+  pidAlive,
+  sleep,
+} = require('./test_support.cjs');
 
 /* ------------------------------------------------------------------ *
  * Sandbox replica (mirrors @deepseek-ai/dsh-cordis-host-runner)
@@ -142,6 +119,24 @@ function assertDynamicTool(tool) {
 }
 
 /** Faithful port of `sandboxDefineTool`: normalize, validate, JSON-clone, mark. */
+/** Port of the sandbox's `cloneJson` contract: plain data only, no `undefined`. */
+function assertLosslessJson(value, where) {
+  if (value === undefined) throw new Error(where + ' must be lossless JSON data, got undefined');
+  if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) return;
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => assertLosslessJson(item, where + '[' + index + ']'));
+    return;
+  }
+  // Objects built inside the vm sandbox have that realm's Object.prototype, so compare
+  // structurally (plain Object at the top of the chain) instead of by identity.
+  const proto = typeof value === 'object' ? Object.getPrototypeOf(value) : undefined;
+  if (proto === null || (proto && Object.getPrototypeOf(proto) === null && proto.constructor && proto.constructor.name === 'Object')) {
+    for (const [key, item] of Object.entries(value)) assertLosslessJson(item, where + '.' + key);
+    return;
+  }
+  throw new Error(where + ' must be lossless JSON data, got ' + typeof value);
+}
+
 function makeSandboxDefineTool(defineTool) {
   return function sandboxDefineTool(options) {
     if (!options || typeof options !== 'object') throw new Error('harness.defineTool options must be an object');
@@ -154,6 +149,12 @@ function makeSandboxDefineTool(defineTool) {
     if (typeof options.execute !== 'function') throw new Error('harness.defineTool execute must be a function');
     const tool = defineTool({
       ...options,
+      // The real sandbox JSON-clones execute results and rejects `undefined` members.
+      async execute(args, exec) {
+        const value = await options.execute(args, exec);
+        assertLosslessJson(value, 'execute result');
+        return value;
+      },
       output: {
         schema: options.output.schema,
         render(args, value) {
@@ -231,156 +232,6 @@ function guardedPlugin(plugin, declared) {
     },
   };
 }
-
-/* ------------------------------------------------------------------ *
- * Service doubles implementing the published contracts
- * ------------------------------------------------------------------ */
-
-/** `SubprocessHandle` per the published service contract, backed by node:child_process. */
-function createSubprocessService() {
-  const spawned = [];
-  const live = new Set();
-  return {
-    spawned,
-    live,
-    spawn(spec) {
-      const stdio = spec.stdio || {};
-      const child = spawn(spec.argv[0], spec.argv.slice(1), {
-        cwd: spec.cwd,
-        env: Object.assign({}, process.env, spec.env || {}),
-        stdio: [
-          stdio.stdin === 'pipe' ? 'pipe' : 'ignore',
-          stdio.stdout === 'pipe' ? 'pipe' : 'ignore',
-          stdio.stderr === 'pipe' ? 'pipe' : 'ignore',
-        ],
-      });
-      let killed = false;
-      const done = new Promise((resolve, reject) => {
-        child.once('error', reject);
-        child.once('close', (exitCode, signal) => resolve({ exitCode, signal }));
-      });
-      const collectMode = stdio.stderr && typeof stdio.stderr === 'object';
-      const handle = {
-        pid: child.pid,
-        stdin: child.stdin || undefined,
-        stdout: child.stdout || undefined,
-        // Collect-mode outputs are read through `collected`, not a piped stream.
-        stderr: collectMode ? undefined : child.stderr || undefined,
-        collected: {},
-        done,
-        terminate() {
-          if (killed) return;
-          killed = true;
-          try {
-            child.kill('SIGTERM');
-          } catch (_) {}
-          const timer = setTimeout(() => {
-            try {
-              child.kill('SIGKILL');
-            } catch (_) {}
-          }, spec.graceMs || 1500);
-          if (timer.unref) timer.unref();
-        },
-        async waitForExit() {
-          try {
-            await done;
-            return true;
-          } catch (_) {
-            return false;
-          }
-        },
-      };
-      const record = { spec, handle, pid: child.pid };
-      spawned.push(record);
-      live.add(record);
-      done.then(
-        () => live.delete(record),
-        () => live.delete(record)
-      );
-      return handle;
-    },
-  };
-}
-
-/** `credentials.resolve` returns `{ value, source } | undefined`, never a bare string. */
-function createCredentialsService(value) {
-  return {
-    async resolve() {
-      return value ? { value, source: 'test' } : undefined;
-    },
-    async describe() {
-      return { configured: !!value, source: value ? 'test' : undefined, writable: true };
-    },
-  };
-}
-
-function createSystemPromptService() {
-  return {
-    section: () => () => {},
-    context: () => () => {},
-    suppressRuntimeContext: () => () => {},
-    tools: () => () => {},
-    variable: () => () => {},
-    async assemble() {
-      return { sections: [] };
-    },
-  };
-}
-
-/* ------------------------------------------------------------------ *
- * Helpers
- * ------------------------------------------------------------------ */
-
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address();
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-function httpGet(url) {
-  return new Promise((resolve, reject) => {
-    const request = require('node:http').get(url, { timeout: 5000 }, (response) => {
-      let body = '';
-      response.setEncoding('utf8');
-      response.on('data', (chunk) => {
-        body += chunk;
-      });
-      response.on('end', () => resolve({ status: response.statusCode, headers: response.headers, body }));
-    });
-    request.on('timeout', () => request.destroy(new Error('http timeout')));
-    request.on('error', reject);
-  });
-}
-
-function portRefuses(port) {
-  return new Promise((resolve) => {
-    const socket = net.connect({ host: '127.0.0.1', port }, () => {
-      socket.destroy();
-      resolve(false);
-    });
-    socket.on('error', () => resolve(true));
-    socket.setTimeout(1500, () => {
-      socket.destroy();
-      resolve(false);
-    });
-  });
-}
-
-function pidAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (_) {
-    return false;
-  }
-}
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Contract parity cross-check against the real local runtime on this machine. */
 async function assertSubprocessContractParity(python) {
@@ -508,8 +359,9 @@ async function main() {
 
   const port = await freePort();
   const declared = new Set(plugin.inject || []);
+  // No `workspace`: this mirrors `DynamicCordisRunnerService.run`, which mounts the
+  // host half with `ctx.plugin(guardedPlugin(plugin))` and no config at all.
   const pluginFiber = ctx.plugin(guardedPlugin(plugin, declared), {
-    workspace: REPO,
     python: PYTHON,
     viewerHost: '127.0.0.1',
     viewerPort: port,
@@ -522,13 +374,42 @@ async function main() {
   const tools = ctx.get('tools');
   const EXPECTED = ['mahjong_start', 'mahjong_status', 'mahjong_cancel', 'mahjong_export'];
   let callSeq = 0;
-  const exec = () => ({ callId: 'call-' + ++callSeq, agent: { cwd: REPO } });
+  // The real `ToolExecution.agent` is an Agent whose durable header carries the cwd
+  // (`Agent.session.header.cwd`). The dynamic `cordis_run` path passes no plugin
+  // config, so this is what the host half must resolve the checkout from.
+  const AGENT = { id: 'session-integration-test', session: { header: { cwd: REPO } } };
+  const exec = () => ({
+    callId: 'call-' + ++callSeq,
+    name: 'mahjong_start',
+    arguments: {},
+    signal: new AbortController().signal,
+    agent: AGENT,
+  });
 
   await check('真实 ToolRuntime 中出现四个工具', () => {
     const names = tools.schemas().map((schema) => schema.name);
     for (const name of EXPECTED) assert.ok(names.includes(name), 'missing tool ' + name);
     assert.strictEqual(names.filter((n) => EXPECTED.includes(n)).length, 4, 'exactly four mahjong tools');
     return names.filter((n) => EXPECTED.includes(n)).join(', ');
+  });
+
+  await check('无 config 时从 exec.agent.session.header.cwd 解析出仓库路径', async () => {
+    // `mahjong_status` reaches resolveWorkspace() -> ensureWorker() and would throw
+    // the actionable "无法确定仓库路径" error if the agent probe had failed.
+    const definition = registered.get('mahjong_status');
+    await assert.rejects(
+      () => definition.execute({ sessionId: 'mj-does-not-exist' }, exec()),
+      (error) => /unknown sessionId/.test(error.message),
+      'the worker answered, so the workspace resolved'
+    );
+    return 'worker 已按 session cwd 启动，未依赖任何插件 config';
+  });
+
+  await check('mahjong_start 暴露 workspace/python 逃生口', () => {
+    const properties = registered.get('mahjong_start').parameters.properties;
+    assert.ok(properties.workspace, 'workspace parameter missing');
+    assert.ok(properties.python, 'python parameter missing');
+    return 'workspace / python 为可选入参';
   });
 
   await check('工具参数是合法的对象 JSON Schema', () => {

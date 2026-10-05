@@ -26,14 +26,17 @@ DeepSeek Harness 内嵌日本麻将运行时：对话内实时卡片、MJAI 导�
 
 插件注册四个工具：`mahjong_start` / `mahjong_status` / `mahjong_cancel` / `mahjong_export`。
 
-DSH 动态包沙箱里没有 `process` / `fs` / `path`，所以仓库路径必须由 `cordis_run` 的 config 显式给出：
+DSH 动态包沙箱里没有 `process` / `fs` / `path`，且 `cordis_run` 不向插件传任何 config，所以仓库路径按此顺序解析：
 
-```
-cordis_run pluginId=<id> config={"workspace":"/绝对路径/mahjong-harness"}
-```
+1. `mahjong_start` 的显式 `workspace` 参数；
+2. profile 安装路径的 `config.workspace`；
+3. 调用会话的 cwd（`exec.agent.session.header.cwd`）——**在仓库目录里启动 DSH 就什么都不用配**；
+4. 第一个已注册 workspace。
+
+会话 cwd 不在仓库时：`mahjong_start workspace="/绝对路径/mahjong-harness" seed=7 mock=true`。
 
 同时准备好 `Mortal/mortal/libriichi.so`（macOS/Linux）或 `libriichi.pyd`（Windows）——`bash setup.sh` 会构建它。
-其余可选配置：`python` / `viewerHost` / `viewerPort` / `baseUrl` / `model`。
+`python` / `viewerPort` / `model` 同样可作为 `mahjong_start` 参数；`viewerHost` / `baseUrl` 仅 profile config（刻意不让对话改写）。
 
 ## 快速安装（macOS / Linux）
 
